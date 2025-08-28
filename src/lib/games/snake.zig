@@ -10,34 +10,31 @@ const score_font_size = 16;
 
 const initial_direction = Constants.DIR_RIGHT;
 const initial_length = 3;
+const GAME_OVER_DURATION = 90;
 
 context: *GameContext,
 body: [256]Utils.Vector2i32,
-length: usize,
+length: usize = initial_length,
 apple: Utils.Vector2i32,
-direction: Utils.Vector2i32,
-pending_direction: Utils.Vector2i32,
-frame: usize,
-score: i32,
+direction: Utils.Vector2i32 = initial_direction,
+pending_direction: Utils.Vector2i32 = initial_direction,
+frame: usize = 0,
+score: i32 = 0,
+game_over_timer: ?usize = null,
 
 pub fn init(self: *SnakeGame, context: *GameContext) void {
     var body: [256]Utils.Vector2i32 = undefined;
-    const length = initial_length;
-    const direction = initial_direction;
 
     body[0] = Utils.Vector2i32{ @divTrunc(Constants.GRID_X_COUNT, 2), @divTrunc(Constants.GRID_Y_COUNT, 2) };
-    for (1..length) |i| {
-        body[i] = body[i - 1] - direction;
+    for (1..initial_length) |i| {
+        body[i] = body[i - 1] - initial_direction;
     }
     const apple = Utils.randomPosition();
-    self.context = context;
-    self.body = body;
-    self.length = length;
-    self.apple = apple;
-    self.direction = direction;
-    self.pending_direction = direction;
-    self.frame = 0;
-    self.score = 0;
+    self.* = .{
+        .context = context,
+        .body = body,
+        .apple = apple,
+    };
 }
 
 pub fn deinit(self: *SnakeGame) void {
@@ -83,6 +80,11 @@ fn drawScore(self: SnakeGame) void {
 }
 
 fn advance(self: *SnakeGame) void {
+    if (self.game_over_timer) |*timer| {
+        if (timer.* == 0) return self.gameOver();
+        timer.* -= 1;
+        return;
+    }
     const ate = eqlV2(self.body[0], self.apple);
     if (ate) {
         self.score += 32;
@@ -98,11 +100,13 @@ fn advance(self: *SnakeGame) void {
     self.direction = self.pending_direction;
     self.body[0] += self.direction;
     if (self.body[0][0] < 0 or self.body[0][1] < 0 or self.body[0][0] >= Constants.GRID_X_COUNT or self.body[0][1] >= Constants.GRID_Y_COUNT) {
-        return self.gameOver();
+        self.game_over_timer = GAME_OVER_DURATION;
+        return;
     }
     for (1..self.length) |i| {
         if (eqlV2(self.body[0], self.body[i])) {
-            return self.gameOver();
+            self.game_over_timer = GAME_OVER_DURATION;
+            return;
         }
     }
     self.frame = 0;

@@ -11,6 +11,9 @@ pub fn main() !void {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) @panic("Memory leaked!");
     }
+    rl.setConfigFlags(.{
+        .window_highdpi = true,
+    });
     rl.initWindow(Constants.WIDTH, Constants.HEIGHT, "Hello Raylib");
     defer rl.closeWindow();
 
