@@ -15,15 +15,10 @@ const Direction = enum {
     right,
 };
 
-const Orientation = enum {
-    Horizontal,
-    Vertical,
-};
-
 const PANEL_X: i32 = @divTrunc(Constants.WIDTH, 2) - @divTrunc(Constants.SCREEN_HEIGHT, 2);
 const PANEL_Y = Constants.SCREEN_Y_PADDING;
 const PANEL_SIZE = Constants.SCREEN_HEIGHT;
-const ANIM_DURATION = 7;
+const ANIM_DURATION = 8;
 const INPUT_COOLDOWN = 5;
 const GAME_OVER_DURATION = 90;
 
@@ -48,13 +43,24 @@ const TILE_COLORS = [_]rl.Color{
     rl.Color.ray_white      // 4096
 };
 
+const Animation = struct {
+    dir: Direction,
+    start: ?u4 = null,
+    end: u4,
+    value: u4,
+
+    merged: bool,
+};
+
 context: *GameContext,
 grid: [4][4]u4 = .{.{0,0,0,0},.{0,0,0,0},.{0,0,0,0},.{0,0,0,0}},
 next_grid: [4][4]u4 = undefined,
 cooldown: usize = 0,
 score: i32 = 0,
-is_animating: bool = false,
+animation_frames: ?usize = null,
 game_over_timer: ?usize = null,
+animations: [16]Animation = undefined,
+animations_len: usize = 0,
 
 pub fn init(self: *ZoabGame, context: *GameContext) void {
     self.* = .{
@@ -74,11 +80,21 @@ pub fn deinit(self: *ZoabGame) void {
 }
 
 pub fn tick(self: *ZoabGame) void {
+    self.draw();
     if (self.game_over_timer) |*timer| {
         if (timer.* == 0) return self.gameOver();
         timer.* -= 1;
+        return;
     }
-    self.draw();
+    if (self.animation_frames) |*frame| {
+        if (frame.* > 0) {
+            frame.* -= 1;
+            return;
+        }
+        self.animation_frames = null;
+        self.animations_len = 0;
+        self.postMove();
+    }
     if (self.context.isRunning()) {
         if (self.cooldown > 0) {
             self.cooldown -= 1;
@@ -169,6 +185,88 @@ fn squeezeMerge(line: *[4]*u4) i32 {
     return score;
 }
 
+fn addAnimation(self: *ZoabGame, animation: Animation) void {
+    self.animations[self.animations_len] = animation;
+    self.animations_len += 1;
+}
+
+fn makeAnimations(self: *ZoabGame, dir: Direction) bool {
+    for (0..4) |j| {
+        for (0..4) |i| {
+            const cell = self.grid[j][i];
+            if (cell == self.next_grid[j][i]) continue;
+            var merged = false;
+            const start: ?u4 = if (cell == 0) null else @intCast(j * 4 + i);
+            const end: u4 = switch (dir) {
+                .down => blk: {
+                    for (j..4) |k| {
+                        if (self.next_grid[k][i] != 0) {
+                            if (self.next_grid[k][i] == cell + 1) {
+                                merged = true;
+                            }
+                            break :blk @intCast(k * 4 + i);
+                        }
+                    }
+                    if (self.next_grid[j][i] == cell + 1) {
+                        merged = true;
+                    }
+                    break :blk @intCast(j * 4 + i);
+                },
+                .up => blk: {
+                    for (0..j) |k| {
+                        if (self.next_grid[k][i] != 0) {
+                            if (self.next_grid[k][i] == cell + 1) {
+                                merged = true;
+                            }
+                            break :blk @intCast(k * 4 + i);
+                        }
+                    }
+                    if (self.next_grid[j][i] == cell + 1) {
+                        merged = true;
+                    }
+                    break :blk @intCast(j * 4 + i);
+                },
+                .left => blk: {
+                    for (0..i) |k| {
+                        if (self.next_grid[j][k] != 0) {
+                            if (self.next_grid[j][k] == cell + 1) {
+                                merged = true;
+                            }
+                            break :blk @intCast(j * 4 + k);
+                        }
+                    }
+                    if (self.next_grid[j][i] == cell + 1) {
+                        merged = true;
+                    }
+                    break :blk @intCast(j * 4 + i);
+                },
+                .right => blk: {
+                    for (i..4) |k| {
+                        if (self.next_grid[j][k] != 0) {
+                            if (self.next_grid[j][k] == cell + 1) {
+                                merged = true;
+                            }
+                            break :blk @intCast(j * 4 + k);
+                        }
+                    }
+                    if (self.next_grid[j][i] == cell + 1) {
+                        merged = true;
+                    }
+                    break :blk @intCast(j * 4 + i);
+                }
+            };
+            self.addAnimation(.{
+                .dir = dir,
+                .start = start,
+                .end = end,
+                .merged = merged,
+                .value = cell,
+            });
+        }
+    }
+    return self.animations_len > 0;
+}
+
 fn move(self: *ZoabGame, dir: Direction) void {
     self.cooldown = INPUT_COOLDOWN;
     var squares: [4][4]*u4 = undefined;
@@ -180,6 +278,12 @@ fn move(self: *ZoabGame, dir: Direction) void {
     for (0..4) |i| {
         self.score += squeezeMerge(&squares[i]);
     }
+    if (self.makeAnimations(dir)) {
+        self.animation_frames = ANIM_DURATION;
+    }
+}
+
+fn postMove(self: *ZoabGame) void {
     if (self.commitGrid()) {
         self.randomlyAppear();
     }
@@ -192,11 +296,12 @@ fn draw(self: ZoabGame) void {
     rl.drawRectangle(PANEL_X, PANEL_Y, PANEL_SIZE, PANEL_SIZE, rl.Color.black);
     for (0..4) |j| {
         for (0..4) |i| {
+            const tile_value = self.grid[j][i];
+            if (tile_value != self.next_grid[j][i]) continue;
             const x: f32 = @floatFromInt(PANEL_X + i * TILE_SIZE + i * TILE_PADDING + TILE_PADDING);
             const y: f32 = @floatFromInt(PANEL_Y + j * TILE_SIZE + j * TILE_PADDING + TILE_PADDING);
             const size: f32 = @floatFromInt(TILE_SIZE);
             const rect = rl.Rectangle.init(x, y, size, size);
-            const tile_value = self.grid[j][i];
             rl.drawRectangleRounded(rect, 0.1, 15, TILE_COLORS[tile_value]);
             if (tile_value == 0) continue;
 
@@ -209,6 +314,45 @@ fn draw(self: ZoabGame) void {
             rl.drawText(ascii_tile_label, text_x, text_y, tile_font_size, rl.Color.black);
         }
     }
+    for (0..self.animations_len) |i| {
+        self.drawAnimationFrame(self.animations[i]);
+    }
+}
+
+fn drawAnimationFrame(self: ZoabGame, animation: Animation) void {
+    if (animation.start) |start| {
+        return self.drawMovement(start, animation.end, animation.value);
+    }
+    self.drawMerge(animation.end, animation.value);
+}
+
+fn drawMovement(self: ZoabGame, start: u4, end: u4, value: u4) void {
+    const istart = start % 4;
+    const jstart = start / 4;
+    const xstart: f32 = @floatFromInt(PANEL_X + istart * TILE_SIZE + istart * TILE_PADDING + TILE_PADDING);
+    const ystart: f32 = @floatFromInt(PANEL_Y + jstart * TILE_SIZE + jstart * TILE_PADDING + TILE_PADDING);
+    const iend = end % 4;
+    const jend = end / 4;
+    const xend: f32 = @floatFromInt(PANEL_X + iend * TILE_SIZE + iend * TILE_PADDING + TILE_PADDING);
+    const yend: f32 = @floatFromInt(PANEL_Y + jend * TILE_SIZE + jend * TILE_PADDING + TILE_PADDING);
+    const xdist = (xend - xstart) * @as(f32, @floatFromInt(self.animation_frames.?)) / @as(f32, @floatFromInt(ANIM_DURATION));
+    const ydist = (yend - ystart) * @as(f32, @floatFromInt(self.animation_frames.?)) / @as(f32, @floatFromInt(ANIM_DURATION));
+    const x = xstart + xdist;
+    const y = ystart + ydist;
+
+    const size: f32 = @floatFromInt(TILE_SIZE);
+    const rect = rl.Rectangle.init(x, y, size, size);
+    rl.drawRectangleRounded(rect, 0.1, 15, TILE_COLORS[value]);
+}
+
+fn drawMerge(self: ZoabGame, square: u4, value: u4) void {
+    const i = square % 4;
+    const j = square / 4;
+    const x: f32 = @floatFromInt(PANEL_X + i * TILE_SIZE + i * TILE_PADDING + TILE_PADDING);
+    const y: f32 = @floatFromInt(PANEL_Y + j * TILE_SIZE + j * TILE_PADDING + TILE_PADDING);
+    const size: f32 = @as(f32, @floatFromInt(TILE_SIZE * self.animation_frames.?)) / @as(f32, @floatFromInt(ANIM_DURATION));
+    const rect = rl.Rectangle.init(x, y, size, size);
+    rl.drawRectangleRounded(rect, 0.1, 15, TILE_COLORS[value]);
 }
 
 fn handleInput(self: *ZoabGame) void {

@@ -4,13 +4,8 @@ const Constants = @import("lib/constants.zig");
 const GameContext = @import("lib/game_context.zig");
 const LogoScreen = @import("lib/screens/logo.zig");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer {
-        const deinit_status = gpa.deinit();
-        if (deinit_status == .leak) @panic("Memory leaked!");
-    }
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.arena.allocator();
     rl.setConfigFlags(.{
         .window_highdpi = true,
     });
